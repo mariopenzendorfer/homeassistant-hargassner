@@ -79,6 +79,15 @@ Complete, professional Home Assistant custom component for Hargassner pellet boi
 - `_receiver_loop()` - Background message receiver
 - `_process_data()` - Encoding detection and parsing
 
+TCP reads are accumulated as bytes until a newline terminates a message. This
+preserves messages split across reads (including splits within numeric values)
+and processes every complete message when several arrive together, leaving the
+latest values in storage. CRLF endings and empty lines are supported. Incomplete
+data survives read timeouts but is discarded when the connection closes, so
+messages from separate connections cannot be combined. This applies the framing
+fix described in [PR #24](https://github.com/bauer-group/IP-HargassnerIntegration/pull/24)
+across all firmware versions.
+
 ### Layer 2: [Message Parser](custom_components/bauergroup_hargassnerintegration/message_parser.py)
 
 **Responsibilities:**
@@ -134,7 +143,7 @@ Boiler (Telnet Port 23)
     ↓ "pm 7 10.1 9.0 67.4 ..."
 TelnetClient._receiver_loop()
     ↓ Decode (UTF-8/Latin-1/CP1252)
-    ↓ Extract lines, find latest "pm" message
+    ↓ Buffer partial lines, process complete "pm" messages in order
 MessageParser.parse_message()
     ↓ Split values, map to parameters
     ↓ Type conversion, bit extraction

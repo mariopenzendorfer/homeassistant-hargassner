@@ -73,6 +73,12 @@ custom_components/bauergroup_hargassnerintegration/
 - Automatic reconnection with exponential backoff
 - Thread-safe data storage
 
+Socket reads feed a persistent byte buffer. Only complete newline-terminated
+lines reach decoding and parsing, so TCP fragmentation cannot publish partial
+measurements. Multiple lines in a read are processed in order; CRLF and blank
+lines are handled. Read timeouts retain unfinished lines, while connection
+closure discards them before reconnecting.
+
 **Architecture:**
 
 ```
