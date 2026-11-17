@@ -455,6 +455,33 @@ def test_metadata_selects_specialized_source_parameters(sensor_module, monkeypat
     assert by_id["test_boiler_operation"].icon == "mdi:check"
 
 
+@pytest.mark.parametrize("sensor_set", ["STANDARD", "FULL"])
+@pytest.mark.parametrize("language", ["EN", "DE"])
+def test_v10_setup_creates_distinct_log_and_pellet_state_entities(sensor_module, sensor_set, language):
+    """The shipped V10 profile must set up both boilers without ID collisions."""
+    entry, coordinator = boiler_context(language=language, sensor_set=sensor_set)
+    coordinator.data["ZK"] = {"value": 6}
+    coordinator.data["PK_ZK"] = {"value": 7}
+    hass = SimpleNamespace(data={"bauergroup_hargassnerintegration": {entry.entry_id: coordinator}})
+    entities = []
+    asyncio.run(sensor_module.async_setup_entry(hass, entry, entities.extend))
+    ids = [entity._attr_unique_id for entity in entities]
+    assert len(ids) == len(set(ids))
+    by_id = {entity._attr_unique_id: entity for entity in entities}
+    log_state = by_id["test_boiler_state"]
+    pellet_state = by_id["test_boiler_pk_state"]
+    assert log_state._param_key == "ZK"
+    assert pellet_state._param_key == "PK_ZK"
+    assert log_state._attr_name == ("HV Status" if language == "DE" else "HV State")
+    assert pellet_state._attr_name == ("PK Status" if language == "DE" else "PK State")
+    expected = "Leistungsbrand" if language == "DE" else "Full firing"
+    assert log_state.native_value == expected
+    assert pellet_state.native_value == expected
+    if sensor_set == "FULL":
+        assert by_id["test_boiler_ZK"].native_value == expected
+        assert by_id["test_boiler_PK_ZK"].native_value == expected
+
+
 def test_default_metadata_preserves_standard_entity_ids(sensor_module):
     """Moving classifications into metadata retains all original STANDARD IDs."""
     entry, coordinator = boiler_context(firmware="V14_1HAR_q1", sensor_set="STANDARD")

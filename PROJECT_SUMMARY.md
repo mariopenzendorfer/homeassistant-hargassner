@@ -199,6 +199,12 @@ original `state` and `operation` identities and supports distinct additional
 entities. `sensor_name` can name a dedicated error entity separately from its
 FULL parameter entity, and `ok_icon` controls its normal-operation icon.
 
+The V10 profile creates separate dedicated log-boiler (`ZK`) and pellet-boiler
+(`PK_ZK`) state entities. Their ID suffixes are `state` and `pk_state`,
+respectively. Each dedicated entity needs a distinct suffix; reusing `state`
+for both prevents sensor-platform setup. FULL also retains their original
+parameter entities under the wire-name IDs.
+
 The registry uses static Python imports and a standard-library dataclass and
 typed dictionary. This avoids filesystem discovery during operation and adds no
 integration runtime dependency. Profiles and parsing remain usable by standalone

@@ -124,7 +124,7 @@ PARAMETER_DESCRIPTIONS: Final[dict[str, ParameterDescription]] = {
         "device_class": None,
         "state_class": None,
         "sensor_type": "boiler_state",
-        "entity_id_suffix": "state",
+        "entity_id_suffix": "pk_state",
         "icon": "mdi:fireplace-off"
     },
     "PK_O2": {
