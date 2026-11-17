@@ -257,6 +257,10 @@ version key. An unset or empty display name falls back to the version string.
 Versions without a dedicated profile display their own version key, regardless
 of display metadata on the default profile.
 
+The device model reported by every sensor also uses this firmware display text,
+with the same fallback to the version string. The configured device name and
+individual sensor labels remain independent of the model text.
+
 The [firmware configuration guide](docs/ADDING_FIRMWARE.md#firmware-specific-names-enums-errors-and-display-text)
 documents the schema and profile registration. Python definition changes require
 a Home Assistant restart. XML layouts, existing configuration keys, and entity

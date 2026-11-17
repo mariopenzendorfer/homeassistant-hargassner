@@ -33,7 +33,7 @@ from .const import (
     SENSOR_SET_FULL,
 )
 from .coordinator import HargassnerDataUpdateCoordinator
-from .firmware_versions import get_firmware_definitions
+from .firmware_versions import get_firmware_definitions, get_firmware_display_name
 from .firmware_versions.definitions import FirmwareDefinitions
 
 # Bidirectional mapping for parameter name variants (umlauts vs ASCII-normalized)
@@ -134,7 +134,7 @@ class HargassnerBaseSensor(CoordinatorEntity, SensorEntity):
             identifiers={(DOMAIN, entry.entry_id)},
             name=entry.data.get(CONF_DEVICE_NAME, "Hargassner Boiler"),
             manufacturer="Hargassner",
-            model="Nano-PK",
+            model=get_firmware_display_name(entry.data.get(CONF_FIRMWARE, "Unknown")),
             sw_version=entry.data.get("firmware", "Unknown"),
             configuration_url=f"http://{entry.data.get('host', '')}",
         )
