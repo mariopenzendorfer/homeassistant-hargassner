@@ -127,6 +127,14 @@ PARAMETER_DESCRIPTIONS: Final[dict[str, ParameterDescription]] = {
         "entity_id_suffix": "pk_state",
         "icon": "mdi:fireplace-off"
     },
+    "O2": {
+        "en": "HV O2",
+        "de": "HV O2",
+    },
+    "O2soll": {
+        "en": "HV O2 Setpoint",
+        "de": "HV O2 soll",
+    },
     "PK_O2": {
         "en": "PK O2",
         "de": "PK O2",
