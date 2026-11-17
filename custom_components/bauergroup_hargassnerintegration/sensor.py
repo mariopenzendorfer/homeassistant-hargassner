@@ -1,7 +1,6 @@
 """Sensor platform for Hargassner Pellet Boiler."""
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -22,26 +21,20 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
-    BOILER_STATES_DE,
-    BOILER_STATES_EN,
     CONF_DEVICE_NAME,
     CONF_EFFICIENCY,
+    CONF_FIRMWARE,
     CONF_LANGUAGE,
     CONF_PELLET_ENERGY,
     CONF_SENSOR_SET,
     DEFAULT_EFFICIENCY,
     DEFAULT_PELLET_ENERGY,
     DOMAIN,
-    ERROR_CODES,
-    LANGUAGE_DE,
     SENSOR_SET_FULL,
-    STATE_CONNECTED,
-    STATE_DISCONNECTED,
 )
 from .coordinator import HargassnerDataUpdateCoordinator
-from .firmware_templates import PARAMETER_DESCRIPTIONS
-
-_LOGGER = logging.getLogger(__name__)
+from .firmware_versions import get_firmware_definitions
+from .firmware_versions.definitions import FirmwareDefinitions
 
 # Bidirectional mapping for parameter name variants (umlauts vs ASCII-normalized)
 # Some firmware templates use German umlauts, others use ASCII replacements
@@ -67,142 +60,55 @@ def _get_param_data(data: dict, key: str) -> dict | None:
     return None
 
 
-# =============================================================================
-# STANDARD SENSOR SET
-# =============================================================================
-# Das Standard-Sensor-Set umfasst 27 Sensoren für die wichtigsten Kesselwerte.
-#
-# Automatisch erstellte Sensoren (immer aktiv, bei STANDARD und FULL):
-#   - Verbindung        : Telnet-Verbindungsstatus (connected/disconnected)
-#   - Betriebsstatus    : Aktueller Kesselzustand (ZK-Wert als Text)
-#   - Störung           : Aktive Störungsnummer und Beschreibung
-#   - Wärmemenge        : Berechnete Wärmeenergie in kWh (Pelletverbrauch × Energiegehalt × Wirkungsgrad)
-#
-# Parameter-Sensoren (key, name, device_class, state_class, icon):
-#   Keys müssen exakt den Parameternamen aus dem Firmware-Template entsprechen.
-# =============================================================================
-STANDARD_SENSORS = [
-    # --- Kessel & Verbrennung ---
-    ("TK", "Kesseltemperatur", SensorDeviceClass.TEMPERATURE, SensorStateClass.MEASUREMENT, "mdi:thermometer"),
-    ("TKsoll", "Kessel Solltemperatur", SensorDeviceClass.TEMPERATURE, SensorStateClass.MEASUREMENT, "mdi:thermometer-lines"),
-    ("TRG", "Rauchgastemperatur", SensorDeviceClass.TEMPERATURE, SensorStateClass.MEASUREMENT, "mdi:smoke"),
-    ("BRT", "Brennraumtemperatur", SensorDeviceClass.TEMPERATURE, SensorStateClass.MEASUREMENT, "mdi:fire"),
-    ("Leistung", "Ausgangsleistung", None, SensorStateClass.MEASUREMENT, "mdi:gauge"),
-    ("Effizienz", "Wirkungsgrad", None, SensorStateClass.MEASUREMENT, "mdi:speedometer"),
-    ("O2", "O2 Gehalt", None, SensorStateClass.MEASUREMENT, "mdi:chart-line"),
-    ("SZist", "Saugzug Ist", None, SensorStateClass.MEASUREMENT, "mdi:fan"),
-    # --- Puffer & Speicher ---
-    ("TPo", "Puffer Oben", SensorDeviceClass.TEMPERATURE, SensorStateClass.MEASUREMENT, "mdi:thermometer-lines"),
-    ("TPm", "Puffer Mitte", SensorDeviceClass.TEMPERATURE, SensorStateClass.MEASUREMENT, "mdi:thermometer-lines"),
-    ("TPu", "Puffer Unten", SensorDeviceClass.TEMPERATURE, SensorStateClass.MEASUREMENT, "mdi:thermometer-lines"),
-    ("Puff Füllgrad", "Pufferfüllgrad", None, SensorStateClass.MEASUREMENT, "mdi:battery-medium"),
-    ("Puffer_soll oben", "Puffer Sollwert Oben", SensorDeviceClass.TEMPERATURE, SensorStateClass.MEASUREMENT, "mdi:thermometer-plus"),
-    ("Puffer_soll unten", "Puffer Sollwert Unten", SensorDeviceClass.TEMPERATURE, SensorStateClass.MEASUREMENT, "mdi:thermometer-minus"),
-    # --- Heizkreise ---
-    ("TVL_1", "Vorlauf Heizkreis 1", SensorDeviceClass.TEMPERATURE, SensorStateClass.MEASUREMENT, "mdi:coolant-temperature"),
-    ("TVLs_1", "Vorlauf Soll Heizkreis 1", SensorDeviceClass.TEMPERATURE, SensorStateClass.MEASUREMENT, "mdi:target"),
-    ("TRL", "Rücklauftemperatur", SensorDeviceClass.TEMPERATURE, SensorStateClass.MEASUREMENT, "mdi:coolant-temperature"),
-    # --- Warmwasser ---
-    ("TB1", "Warmwasser", SensorDeviceClass.TEMPERATURE, SensorStateClass.MEASUREMENT, "mdi:water-boiler"),
-    ("TBs_1", "Warmwasser Soll", SensorDeviceClass.TEMPERATURE, SensorStateClass.MEASUREMENT, "mdi:target"),
-    # --- Außentemperatur ---
-    ("Taus", "Außentemperatur", SensorDeviceClass.TEMPERATURE, SensorStateClass.MEASUREMENT, "mdi:thermometer"),
-    # --- Pellets ---
-    ("Lagerstand", "Pelletvorrat", None, SensorStateClass.TOTAL, "mdi:silo"),
-    ("Verbrauchszähler", "Pelletverbrauch", None, SensorStateClass.TOTAL_INCREASING, "mdi:counter"),
-]
-
-
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Hargassner sensors from a config entry."""
+    """Create entities using the selected firmware's declared sensor metadata."""
     coordinator: HargassnerDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
-
     sensor_set = entry.data.get(CONF_SENSOR_SET, "STANDARD")
     language = entry.data.get(CONF_LANGUAGE, "EN")
+    definitions = get_firmware_definitions(entry.data.get(CONF_FIRMWARE, "V14_1HAR_q1"))
 
-    entities: list[SensorEntity] = []
+    # Connection and calculated energy are integration-level entities.
+    entities: list[SensorEntity] = [
+        HargassnerConnectionSensor(coordinator, entry, language, definitions=definitions),
+        HargassnerEnergySensor(coordinator, entry, language, definitions=definitions),
+    ]
 
-    # Always add connection sensor
-    entities.append(HargassnerConnectionSensor(coordinator, entry, language))
+    # Profiles select the source parameters for dedicated state/error entities.
+    for key, description in definitions.parameter_descriptions.items():
+        sensor_type = description.get("sensor_type", "parameter")
+        if sensor_type == "boiler_state":
+            entities.append(HargassnerStateSensor(
+                coordinator, entry, language, key, definitions=definitions
+            ))
+        elif sensor_type == "error":
+            entities.append(HargassnerErrorSensor(
+                coordinator, entry, language, key, definitions=definitions
+            ))
+        elif sensor_type != "parameter":
+            raise ValueError(f"Unknown sensor_type {sensor_type!r} for parameter {key!r}")
 
-    # Add boiler state sensor
-    entities.append(HargassnerStateSensor(coordinator, entry, language))
-
-    # Add error sensor
-    entities.append(HargassnerErrorSensor(coordinator, entry, language))
-
-    # Add energy sensor
-    entities.append(HargassnerEnergySensor(coordinator, entry, language))
-
-    # Add sensors based on sensor set configuration
     if sensor_set == SENSOR_SET_FULL:
-        # FULL mode: Create sensors for ALL parameters from firmware template
-        # Get all parameter names from the message parser
-        for param_def in coordinator.telnet_client._parser.parameters:
-            param_name = param_def.name
-
-            # Determine device class based on unit
-            device_class = None
-            if param_def.unit == "°C":
-                device_class = SensorDeviceClass.TEMPERATURE
-            elif param_def.unit == "mA":
-                device_class = SensorDeviceClass.CURRENT
-            elif param_def.unit in ["mbar", "bar"]:
-                device_class = SensorDeviceClass.PRESSURE
-
-            # Determine state class
-            state_class = None
-            if not param_def.is_digital:
-                # Most analog sensors are measurements
-                # Special cases for counters
-                if param_name in ["Verbrauchszähler", "Verbrauchszaehler", "Brennerstarts", "Betriebsstunden"]:
-                    state_class = SensorStateClass.TOTAL_INCREASING
-                elif param_name == "Lagerstand":
-                    state_class = SensorStateClass.TOTAL
-                else:
-                    state_class = SensorStateClass.MEASUREMENT
-
-            # Select language from bilingual description
-            desc_dict = param_def.description
-            if isinstance(desc_dict, dict):
-                display_name = desc_dict.get(language.lower(), desc_dict.get("en", param_name))
-            else:
-                display_name = desc_dict  # Fallback if it's already a string
-
-            # Create sensor
-            entities.append(
-                HargassnerParameterSensor(
-                    coordinator,
-                    entry,
-                    param_name,
-                    display_name,  # No device prefix - handled by has_entity_name
-                    device_class,
-                    state_class,
-                    None,  # icon
-                )
-            )
+        # Preserve FULL parameter entities, including their existing unique IDs.
+        parameter_keys = [p.name for p in coordinator.telnet_client._parser.parameters]
     else:
-        # STANDARD mode: Only create predefined sensors
-        for sensor_def in STANDARD_SENSORS:
-            key, name, device_class, state_class, icon = sensor_def
-            desc = PARAMETER_DESCRIPTIONS.get(key, {})
-            display_name = desc.get(language.lower(), name)
-            entities.append(
-                HargassnerParameterSensor(
-                    coordinator,
-                    entry,
-                    key,
-                    display_name,  # No device prefix - handled by has_entity_name
-                    device_class,
-                    state_class,
-                    icon,
-                )
-            )
+        parameter_keys = [
+            key for key, description in definitions.parameter_descriptions.items()
+            if description.get("standard", False)
+        ]
 
+    for key in parameter_keys:
+        entities.append(HargassnerParameterSensor(coordinator, entry, key, definitions=definitions))
+
+    entity_ids = [entity._attr_unique_id for entity in entities]
+    if len(entity_ids) != len(set(entity_ids)):
+        raise ValueError(
+            "Firmware sensor metadata produces duplicate entity IDs; "
+            "use distinct entity_id_suffix values for dedicated entities"
+        )
     async_add_entities(entities)
 
 
@@ -215,10 +121,15 @@ class HargassnerBaseSensor(CoordinatorEntity, SensorEntity):
         self,
         coordinator: HargassnerDataUpdateCoordinator,
         entry: ConfigEntry,
+        definitions: FirmwareDefinitions | None = None,
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self._entry = entry
+        # Resolve per boiler, so multiple firmware versions can coexist.
+        self._definitions = definitions if definitions is not None else get_firmware_definitions(
+            entry.data.get(CONF_FIRMWARE, "V14_1HAR_q1")
+        )
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name=entry.data.get(CONF_DEVICE_NAME, "Hargassner Boiler"),
@@ -227,6 +138,30 @@ class HargassnerBaseSensor(CoordinatorEntity, SensorEntity):
             sw_version=entry.data.get("firmware", "Unknown"),
             configuration_url=f"http://{entry.data.get('host', '')}",
         )
+
+    def _configure_parameter_enum(self, key: str, language: str) -> None:
+        """Build entity-local options from a parameter's firmware enum mapping."""
+        self._enum_language = language.lower()
+        self._enum_labels = self._definitions.parameter_descriptions.get(key, {}).get("enum")
+        if self._enum_labels is not None:
+            # Deduplicate labels; multiple wire values may describe the same state.
+            self._attr_options = list(
+                dict.fromkeys(
+                    labels.get(self._enum_language, labels["en"])
+                    for labels in self._enum_labels.values()
+                )
+            )
+            self._attr_device_class = SensorDeviceClass.ENUM
+            self._attr_state_class = None
+
+    def _parameter_enum_value(self, value: Any) -> str:
+        """Translate a wire value, retaining unknown states as valid enum options."""
+        labels = self._enum_labels.get(value, {})
+        fallback = "Unbekannt" if self._enum_language == "de" else "Unknown"
+        label = labels.get(self._enum_language, labels.get("en", fallback))
+        if label not in self._attr_options:
+            self._attr_options.append(label)
+        return label
 
 
 class HargassnerConnectionSensor(HargassnerBaseSensor):
@@ -239,9 +174,11 @@ class HargassnerConnectionSensor(HargassnerBaseSensor):
         coordinator: HargassnerDataUpdateCoordinator,
         entry: ConfigEntry,
         language: str,
+        *,
+        definitions: FirmwareDefinitions | None = None,
     ) -> None:
         """Initialize connection sensor."""
-        super().__init__(coordinator, entry)
+        super().__init__(coordinator, entry, definitions)
         self._attr_name = "Connection" if language.upper() == "EN" else "Verbindung"
         self._attr_unique_id = f"{entry.entry_id}_connection"
         self._language = language
@@ -279,159 +216,138 @@ class HargassnerConnectionSensor(HargassnerBaseSensor):
         }
 
 
-class HargassnerStateSensor(HargassnerBaseSensor):
-    """Sensor for boiler state."""
-
-    _attr_device_class = SensorDeviceClass.ENUM
-    _attr_icon = "mdi:fireplace"
-
-    def __init__(
-        self,
-        coordinator: HargassnerDataUpdateCoordinator,
-        entry: ConfigEntry,
-        language: str,
-    ) -> None:
-        """Initialize state sensor."""
-        super().__init__(coordinator, entry)
-        self._attr_name = "Boiler State" if language.upper() == "EN" else "Kesselzustand"
-        self._attr_unique_id = f"{entry.entry_id}_state"
-        self._language = language
-        self._attr_options = BOILER_STATES_DE if language.upper() == "DE" else BOILER_STATES_EN
-
-    @property
-    def native_value(self) -> str | None:
-        """Return boiler state."""
-        zk_data = _get_param_data(self.coordinator.data, "ZK")
-        if not zk_data:
-            return None
-
-        try:
-            state_idx = int(zk_data.get("value", 0))
-            if 0 <= state_idx < len(self._attr_options):
-                return self._attr_options[state_idx]
-        except (ValueError, TypeError):
-            pass
-
-        return "Unbekannt" if self._language.upper() == "DE" else "Unknown"
-
-    @property
-    def icon(self) -> str:
-        """Return icon based on state."""
-        zk_data = _get_param_data(self.coordinator.data, "ZK")
-        if zk_data:
-            try:
-                state_idx = int(zk_data.get("value", 0))
-                if state_idx in [6, 7]:  # Transition to FF or Full firing
-                    return "mdi:fireplace"
-            except (ValueError, TypeError):
-                pass
-        return "mdi:fireplace-off"
-
-
-class HargassnerErrorSensor(HargassnerBaseSensor):
-    """Sensor for error status."""
-
-    _attr_device_class = SensorDeviceClass.ENUM
-    _attr_icon = "mdi:alert"
-
-    def __init__(
-        self,
-        coordinator: HargassnerDataUpdateCoordinator,
-        entry: ConfigEntry,
-        language: str,
-    ) -> None:
-        """Initialize error sensor."""
-        super().__init__(coordinator, entry)
-        self._attr_name = "Operation Status" if language.upper() == "EN" else "Betriebsstatus"
-        self._attr_unique_id = f"{entry.entry_id}_operation"
-        self._language = language
-        self._attr_options = ["OK"] + [
-            err[language.lower()] for err in ERROR_CODES.values()
-        ]
-
-    @property
-    def native_value(self) -> str:
-        """Return error status."""
-        # Get error code from "Störungs Nr" analog parameter
-        # 0 = no error, >0 = error code
-        error_code_data = _get_param_data(self.coordinator.data, "Störungs Nr")
-
-        if not error_code_data:
-            return "OK"
-
-        error_code = str(int(error_code_data.get("value", 0)))
-
-        if error_code == "0":
-            return "OK"
-
-        # Error is present - look up description
-        error_info = ERROR_CODES.get(error_code)
-        if error_info:
-            return error_info[self._language.lower()]
-
-        # Unknown error code - add to options dynamically for ENUM compatibility
-        lang = self._language.lower()
-        fallback = f"Error {error_code}" if lang == "en" else f"Fehler {error_code}"
-        if fallback not in self._attr_options:
-            self._attr_options.append(fallback)
-        return fallback
-
-    @property
-    def icon(self) -> str:
-        """Return icon based on error state."""
-        if self.native_value == "OK":
-            return "mdi:check"
-        return "mdi:alert"
-
-
 class HargassnerParameterSensor(HargassnerBaseSensor):
-    """Sensor for a single boiler parameter."""
+    """Display one wire parameter according to its firmware's declared metadata."""
 
     def __init__(
         self,
         coordinator: HargassnerDataUpdateCoordinator,
         entry: ConfigEntry,
         param_key: str,
-        name: str,
-        device_class: SensorDeviceClass | None,
-        state_class: SensorStateClass | None,
-        icon: str | None,
+        *,
+        language: str | None = None,
+        definitions: FirmwareDefinitions | None = None,
     ) -> None:
-        """Initialize parameter sensor."""
-        super().__init__(coordinator, entry)
+        """Apply the resolved profile's parameter metadata.
+
+        XML units remain authoritative. Enum and error handling suppress numeric
+        units/state classes because Home Assistant requires categorical metadata.
+        """
+        super().__init__(coordinator, entry, definitions)
         self._param_key = param_key
-        self._attr_name = name
+        self._language = (language or entry.data.get(CONF_LANGUAGE, "EN")).lower()
+        self._description = self._definitions.parameter_descriptions.get(param_key, {})
+        self._sensor_type = self._description.get("sensor_type", "parameter")
+        self._attr_name = self._description.get(
+            self._language, self._description.get("en", param_key)
+        )
         self._attr_unique_id = f"{entry.entry_id}_{param_key}"
-        self._attr_device_class = device_class
-        self._attr_state_class = state_class
-        if icon:
-            self._attr_icon = icon
+        self._attr_device_class = self._description.get("device_class")
+        self._attr_state_class = self._description.get("state_class")
+        self._attr_icon = self._description.get("icon")
+        self._configure_parameter_enum(param_key, self._language)
+
+        if self._sensor_type == "error":
+            self._attr_device_class = SensorDeviceClass.ENUM
+            self._attr_state_class = None
+            self._attr_options = list(dict.fromkeys(
+                ["OK"] + [err[self._language] for err in self._definitions.error_codes.values()]
+            ))
 
     @property
     def native_value(self) -> float | int | str | None:
-        """Return parameter value."""
+        """Return a raw value, enum label, or error translation as declared."""
+        if self._sensor_type == "error":
+            return self._error_value()
         param_data = _get_param_data(self.coordinator.data, self._param_key)
         if param_data:
-            return param_data.get("value")
+            value = param_data.get("value")
+            if value is not None and self._enum_labels is not None:
+                return self._parameter_enum_value(value)
+            return value
         return None
+
+    def _error_value(self) -> str:
+        """Translate the selected error parameter and keep unknown options local."""
+        param_data = _get_param_data(self.coordinator.data, self._param_key)
+        if not param_data:
+            return "OK"
+        error_code = str(int(param_data.get("value", 0)))
+        if error_code == "0":
+            return "OK"
+        labels = self._definitions.error_codes.get(error_code)
+        if labels:
+            return labels[self._language]
+        label = f"Fehler {error_code}" if self._language == "de" else f"Error {error_code}"
+        if label not in self._attr_options:
+            self._attr_options.append(label)
+        return label
 
     @property
     def native_unit_of_measurement(self) -> str | None:
-        """Return unit of measurement."""
+        """Use the XML unit for ordinary parameters; categorical sensors have none."""
+        if self._enum_labels is not None or self._sensor_type == "error":
+            return None
         param_data = _get_param_data(self.coordinator.data, self._param_key)
         if param_data and param_data.get("unit"):
             unit = param_data["unit"]
-
-            # Map units to Home Assistant constants
             if unit == "°C":
                 return UnitOfTemperature.CELSIUS
             if unit == "%":
                 return PERCENTAGE
             if unit == "kg":
                 return UnitOfMass.KILOGRAMS
-
             return unit
         return None
+
+    @property
+    def icon(self) -> str | None:
+        """Read icons from profile metadata, including enum values and OK status."""
+        if self._sensor_type == "error" and self.native_value == "OK":
+            return self._description.get("ok_icon", self._attr_icon)
+        param_data = _get_param_data(self.coordinator.data, self._param_key)
+        if self._enum_labels is not None and param_data:
+            labels = self._enum_labels.get(param_data.get("value"), {})
+            return labels.get("icon", self._attr_icon)
+        return self._attr_icon
+
+
+class HargassnerStateSensor(HargassnerParameterSensor):
+    """Preserve the dedicated state entity's identity using a profile-selected key."""
+
+    def __init__(
+        self,
+        coordinator: HargassnerDataUpdateCoordinator,
+        entry: ConfigEntry,
+        language: str,
+        param_key: str,
+        *,
+        definitions: FirmwareDefinitions | None = None,
+    ) -> None:
+        """Reuse generic parameter behavior with the declared dedicated entity ID."""
+        super().__init__(coordinator, entry, param_key, language=language, definitions=definitions)
+        suffix = self._description.get("entity_id_suffix", f"{param_key}_state")
+        self._attr_unique_id = f"{entry.entry_id}_{suffix}"
+
+
+class HargassnerErrorSensor(HargassnerParameterSensor):
+    """Preserve the dedicated error entity's identity using a profile-selected key."""
+
+    def __init__(
+        self,
+        coordinator: HargassnerDataUpdateCoordinator,
+        entry: ConfigEntry,
+        language: str,
+        param_key: str,
+        *,
+        definitions: FirmwareDefinitions | None = None,
+    ) -> None:
+        """Reuse declared error handling and optional dedicated translated names."""
+        super().__init__(coordinator, entry, param_key, language=language, definitions=definitions)
+        names = self._description.get("sensor_name", {})
+        self._attr_name = names.get(self._language, names.get("en", self._attr_name))
+        suffix = self._description.get("entity_id_suffix", f"{param_key}_operation")
+        self._attr_unique_id = f"{entry.entry_id}_{suffix}"
 
 
 class HargassnerEnergySensor(HargassnerBaseSensor):
@@ -447,9 +363,11 @@ class HargassnerEnergySensor(HargassnerBaseSensor):
         coordinator: HargassnerDataUpdateCoordinator,
         entry: ConfigEntry,
         language: str,
+        *,
+        definitions: FirmwareDefinitions | None = None,
     ) -> None:
         """Initialize energy sensor."""
-        super().__init__(coordinator, entry)
+        super().__init__(coordinator, entry, definitions)
         self._attr_name = "Heat Output" if language.upper() == "EN" else "Wärmemenge"
         self._attr_unique_id = f"{entry.entry_id}_energy"
         self._language = language

@@ -44,7 +44,7 @@ except (ImportError, FileNotFoundError) as err:
 
 
 # Boiler states, as ZK values. Names match the documented --state choices; the
-# integers are the indices into BOILER_STATES_EN/DE in const.py.
+# integers are wire values in the default profile's ZK enum mapping.
 BOILER_STATES: Dict[str, int] = {
     "off": 1,
     "ignition": 5,

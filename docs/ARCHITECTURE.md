@@ -180,11 +180,60 @@ custom_components/bauergroup_hargassnerintegration/
    - Digital: `bool` (bit extraction)
    - Graceful error handling on parse failure
 
-### 6. Firmware Templates (`src/firmware_templates.py`)
+### 6. Firmware templates and lookup profiles
 
 **Responsibilities:**
 - Define message structure for each firmware version
-- Provide parameter descriptions
+- Keep XML layouts in `firmware_templates.py`
+- Select bilingual names, enums, and errors through `firmware_versions/__init__.py`
+
+`firmware_versions/default.py` preserves the original lookup tables.
+`firmware_versions/V10_2HAR_n2.py` contains only firmware-specific overrides. Other
+firmware uses the default profile until a dedicated profile is registered.
+Profiles expose `PARAMETER_DESCRIPTIONS`, `ERROR_CODES`, and optional
+`DISPLAY_NAME`. The display name is used by setup and options firmware selectors;
+configuration continues to store the version key. An unset or empty name falls
+back to that key.
+
+Each parameter description can have `en`/`de` names and an `enum` mapping
+from integer wire values to bilingual state labels. Boiler state (`ZK`) uses this
+same mapping. Enum labels may include an `icon`, used by parameter and dedicated
+state sensors. Setting `enum` to `None` explicitly disables an inherited enum and
+restores a parameter's normal numeric behavior.
+
+The parser attaches profile descriptions to analog and digital parameters while
+preserving raw values and XML units. STANDARD and FULL sensor sets translate enums
+at the entity boundary and set Home Assistant's enum device class, without units
+or numeric state classes. Unknown enum values use `Unknown`/`Unbekannt`; unknown
+errors retain the existing `Error N`/`Fehler N` fallback. Their options are added
+only to the affected entity's option list.
+
+The profile resolver uses static imports and Python standard-library dataclasses
+and typed dictionaries. This avoids a runtime dependency or filesystem discovery
+and keeps the parser and developer tools usable without Home Assistant. Dedicated
+profiles are recursively merged with default definitions: missing parameters,
+languages, error codes, enum states, and label metadata inherit their defaults.
+Empty tables therefore inherit everything. Resolved dedicated profiles contain
+independent dictionaries, so changing them cannot alter the defaults or source
+overrides. Display names are selected separately and always fall back to the
+firmware key rather than the default profile's display metadata.
+
+Sensor setup reads `sensor_type`, `device_class`, `state_class`, `standard`, and
+icon metadata from these same descriptions. It does not infer classifications
+from names or units. `boiler_state` and `error` roles select the source parameter
+for a dedicated entity, whose identity is controlled by `entity_id_suffix`.
+The original `state`/`operation` IDs remain in the default definitions. Additional
+roles use distinct suffixes or report an explicit duplicate-ID error. FULL
+parameter entities retain their IDs and share the same enum/error handling.
+Connection and calculated-energy entities remain separate. Setup resolves one
+profile and shares it among entities, avoiding repeated merges while each entity
+maintains its own enum options.
+
+All consumers use `get_firmware_definitions(version)`. Unused boiler-state
+arrays and default-profile compatibility exports have been removed; standalone
+tools load the same resolver through their existing import shim.
+See [firmware profile editing](ADDING_FIRMWARE.md#firmware-specific-names-enums-errors-and-display-text)
+for the schema and registration workflow.
 
 **Supported Versions:**
 - `V14_1HAR_q1` - 112 analog + many digital parameters
@@ -245,7 +294,7 @@ custom_components/bauergroup_hargassnerintegration/
 
 **Sensor Sets:**
 
-- **STANDARD**: 27 sensors (4 automatic + 23 parameters: temperatures, setpoints, efficiency, O2, etc.)
+- **STANDARD**: 26 default sensors (22 declared parameters plus connection, state, error, and energy); profiles can change membership or add dedicated roles.
 - **FULL**: All available parameters from firmware template (varies by firmware version)
 
 ## Data Flow
@@ -415,7 +464,7 @@ Requires integration reload to apply.
 
 4. **Sensor Creation:**
    - Only requested sensors are created
-   - STANDARD mode: 27 entities (23 predefined + connection + state + error + energy)
+   - STANDARD mode: 26 default entities (22 declared parameters + connection + state + error + energy)
    - FULL mode: All firmware parameters + 4 special sensors (varies by firmware)
 
 ## Extensibility
@@ -428,9 +477,11 @@ Requires integration reload to apply.
 
 ### Adding Custom Sensors
 
-1. Define in `STANDARD_SENSORS` or `ADDITIONAL_SENSORS`
-2. Specify device class, state class, and icon
-3. Sensor automatically created if parameter exists
+Parameter descriptions declare device class, state class, icon, and optional
+enum/error handling. `standard: True` includes a parameter in STANDARD; FULL
+includes every parameter in the selected XML template. Firmware profiles can
+override individual fields without changing sensor code. See the
+[sensor metadata reference](ADDING_FIRMWARE.md#sensor-metadata).
 
 ### Adding New Platforms
 

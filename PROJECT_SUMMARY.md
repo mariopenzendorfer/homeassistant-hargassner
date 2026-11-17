@@ -15,7 +15,7 @@ Complete, professional Home Assistant custom component for Hargassner pellet boi
 ✅ **Thread-Safe** - Async/await architecture
 ✅ **Robust Encoding** - UTF-8, Latin-1, CP1252 support
 ✅ **GUI Configuration** - Config Flow with validation
-✅ **Multi-Firmware** - Supports multiple boiler versions
+✅ **Multi-Firmware** - Version-specific layouts, translations, enums, and optional display names
 ✅ **Energy Dashboard** - Built-in energy sensor (kWh)
 ✅ **Bilingual** - English and German translations
 ✅ **Error Tolerant** - Graceful degradation, extensive error handling
@@ -30,13 +30,17 @@ Complete, professional Home Assistant custom component for Hargassner pellet boi
 │   ├── config_flow.py                      # GUI configuration
 │   ├── const.py                            # Constants
 │   ├── coordinator.py                      # Data coordinator
+│   ├── firmware_templates.py               # XML message layouts
+│   ├── firmware_versions/                  # Firmware-specific lookup profiles
+│   │   ├── __init__.py                      # Profile registry and fallback
+│   │   ├── definitions.py                   # Typed profile container
+│   │   ├── default.py                       # Original lookup definitions
+│   │   └── V10_2HAR_n2.py                   # Sparse V10 overrides
 │   ├── manifest.json                       # HA integration metadata
+│   ├── message_parser.py                   # Telnet message parser
+│   ├── parameter_description.py            # Bilingual names and optional enums
 │   ├── sensor.py                           # Sensor platform
-│   ├── src/                                # Core business logic
-│   │   ├── __init__.py
-│   │   ├── firmware_templates.py           # XML templates for firmware versions
-│   │   ├── message_parser.py               # Telnet message parser
-│   │   └── telnet_client.py                # Thread-safe telnet client
+│   ├── telnet_client.py                    # Thread-safe telnet client
 │   └── translations/                       # Localization
 │       ├── en.json
 │       └── de.json
@@ -45,19 +49,20 @@ Complete, professional Home Assistant custom component for Hargassner pellet boi
 │   ├── CONTRIBUTING.md                     # Contribution guidelines
 │   ├── DEVELOPMENT.md                      # Developer setup & workflow
 │   └── INSTALLATION.md                     # End-user installation guide
-├── tests/                                  # Unit tests (starter)
+├── tests/                                  # Parser, generator, and firmware behavior tests
+│   ├── test_firmware_definitions.py
+│   ├── test_message_generator.py
 │   └── test_message_parser.py
 ├── .gitignore                              # Git ignore patterns
 ├── LICENSE                                 # MIT License
 ├── PROJECT_SUMMARY.md                      # This file
 └── README.md                               # Main project README
 
-Total: 18 files
 ```
 
 ## Technical Architecture
 
-### Layer 1: Telnet Client (`src/telnet_client.py`)
+### Layer 1: [Telnet Client](custom_components/bauergroup_hargassnerintegration/telnet_client.py)
 
 **Responsibilities:**
 - Persistent telnet connection (port 23)
@@ -74,7 +79,7 @@ Total: 18 files
 - `_receiver_loop()` - Background message receiver
 - `_process_data()` - Encoding detection and parsing
 
-### Layer 2: Message Parser (`src/message_parser.py`)
+### Layer 2: [Message Parser](custom_components/bauergroup_hargassnerintegration/message_parser.py)
 
 **Responsibilities:**
 - Parse XML firmware templates
@@ -111,7 +116,7 @@ pm <val0> <val1> <val2> ... <valN>
 
 **Sensor Sets:**
 
-- **STANDARD** - 27 sensors (4 automatic + 23 parameters)
+- **STANDARD** - 26 default sensors (22 declared parameters plus connection, state, error, and energy); membership is configurable per firmware
 - **FULL** - All sensors from firmware template (varies by version)
 
 ### Layer 5: Configuration (`config_flow.py`)
@@ -143,10 +148,119 @@ Sensor Entities (Connection, State, Parameters, Energy)
 
 ## Firmware Support
 
-Currently supported firmware versions:
-- **V14_1HAR_q1** - 112 analog + many digital parameters
+Firmware support separates the message layout from the interpretation displayed
+to users. [Firmware templates](custom_components/bauergroup_hargassnerintegration/firmware_templates.py)
+define XML channel positions, digital bits, and units. The version keys offered
+in configuration are listed in
+[the integration constants](custom_components/bauergroup_hargassnerintegration/const.py),
+including `V10_2HAR_n2` and the existing V14 and V40 variants. Layout keys and
+configuration keys must match exactly.
 
-Adding new versions: Just add XML template to `firmware_templates.py`
+### Lookup profiles
+
+[The profile registry](custom_components/bauergroup_hargassnerintegration/firmware_versions/__init__.py)
+selects definitions for the configured firmware. Versions without a registered
+profile use [the default definitions](custom_components/bauergroup_hargassnerintegration/firmware_versions/default.py),
+which preserve the original parameter names, boiler-state labels, and error
+translations. [The V10 profile](custom_components/bauergroup_hargassnerintegration/firmware_versions/V10_2HAR_n2.py)
+contains only firmware-specific differences. Missing parameters, translations,
+error codes, enum states, and label metadata are inherited recursively from the
+default profile. Empty tables inherit all defaults. Resolved dedicated profiles
+contain independent dictionaries, so changing them cannot modify the default
+tables or source overrides. The inherited states and errors are starting values,
+not verified Neo-HV definitions.
+
+Profiles contain two lookup tables: `PARAMETER_DESCRIPTIONS` and `ERROR_CODES`.
+Parameter descriptions provide English and German names and an optional `enum`
+mapping from integer wire values to translated state labels. Boiler state (`ZK`)
+uses this same mechanism; other analog or digital parameters can define their
+own mappings. Enum keys can be sparse. Optional `icon` metadata on a boiler-state
+enum value controls the dedicated state sensor's icon without assuming the same
+state numbers across firmware versions. Error codes retain string keys and
+English/German descriptions; code zero represents normal operation. Parameters
+without translated names use their wire names, allowing metadata-only entries.
+
+Sensor classification is also part of each parameter description. `device_class`,
+`state_class`, `icon`, and `standard` declare the Home Assistant classification,
+appearance, and STANDARD membership. `sensor_type` selects ordinary parameter
+handling or the `boiler_state`/`error` roles. These roles create dedicated entities
+from the selected parameter keys; no sensor class assumes that a specific wire
+name is the boiler-state or error source. `entity_id_suffix` preserves the
+original `state` and `operation` identities and supports distinct additional
+entities. `sensor_name` can name a dedicated error entity separately from its
+FULL parameter entity, and `ok_icon` controls its normal-operation icon.
+
+The registry uses static Python imports and a standard-library dataclass and
+typed dictionary. This avoids filesystem discovery during operation and adds no
+integration runtime dependency. Profiles and parsing remain usable by standalone
+developer tools without Home Assistant. The unused legacy boiler-state arrays and
+default-profile compatibility exports have been removed. Production code and
+standalone developer tools select definitions through the same resolver.
+
+### Parser and sensor behavior
+
+The parser attaches the selected profile's descriptions to analog and digital
+parameters while preserving raw values and XML units. Sensor setup resolves the
+profile once and shares it among the device's entities. It reads classifications
+from metadata rather than inferring them from names or units. The V10 profile
+retains an explicit temperature-class override for `Max Anf Kessel`, whose XML
+unit differs from the default layout. Connection and calculated-energy sensors
+remain separate because they are not direct wire parameters.
+
+STANDARD and FULL sensor sets apply translated names, enum labels, and error
+translations at the entity boundary. FULL retains parameter IDs alongside the
+dedicated entities. Invalid roles and colliding dedicated IDs fail explicitly.
+Enum sensors
+declare Home Assistant's enum device class and omit numeric units and state
+classes. Setting a parameter's `enum` mapping to `None` explicitly disables an
+inherited enum and restores its normal raw sensor value and unit handling.
+Omitting the field inherits its default mapping.
+
+Unknown enum values appear as `Unknown` or `Unbekannt`; unknown error codes use
+`Error N` or `Fehler N`. These fallback labels are added to the affected entity's
+options without changing shared profile definitions. Profile selection is per
+boiler, allowing devices with different firmware versions to coexist.
+
+### V10 legacy configuration baseline
+
+The V10 profile preserves the active mappings from the earlier V10-only
+integration. Its list positions are zero-based wire codes. Separate enums cover
+the log boiler (`ZK`), pellet boiler (`PK_ZK`), log-boiler mode (`Programm`),
+heating circuit 1 state (`HKZustand_1`) and mode (`FR1 Zustand`), and DHW state
+(`BoiZustand_1`). Despite its name, `PufZustand` uses the two-state pellet-enable
+mapping: `Gesperrt`/`Freigegeben`. The old six-state buffer list was unused and is
+not assigned to this parameter.
+
+The eight active binary formatter bindings use integer enum keys zero and one,
+which also match the parser's native boolean values, with German labels
+`Inaktiv`/`Aktiv`. Parameter names inherit the defaults when their meanings are
+equivalent, even if the old formatter used different wording or an HV/PK prefix.
+Overrides retain names missing from the defaults and correct the distinct
+meanings of pellet-enable status and HC1 mode. Enum labels remain unchanged.
+The old conversion of numeric values to two-decimal strings is not carried
+into parsing. Unsupported acronym expansions are avoided; labels such as `ABS`,
+`STB`, and `TÜV` remain unchanged.
+
+Only differences are stored in the V10 profile. Notification 309 already has the
+default German label `Nachlegen` and therefore needs no error override. The
+orphan `BoiZustand_1_2` alias is excluded because it is absent from the old and
+current XML layouts. The old integration remains a read-only migration baseline;
+the current defaults, XML positions, sensor membership, and dedicated entity IDs
+remain unchanged. Additional mapped parameters are visible in FULL mode; profiles
+can opt them into STANDARD through metadata.
+
+### Firmware display text and configuration
+
+Each dedicated profile can supply an optional `DISPLAY_NAME`. Setup and options
+forms display that label while submitting and storing the unchanged firmware
+version key. An unset or empty display name falls back to the version string.
+Versions without a dedicated profile display their own version key, regardless
+of display metadata on the default profile.
+
+The [firmware configuration guide](docs/ADDING_FIRMWARE.md#firmware-specific-names-enums-errors-and-display-text)
+documents the schema and profile registration. Python definition changes require
+a Home Assistant restart. XML layouts, existing configuration keys, and entity
+IDs are preserved, so this feature requires no config-entry migration.
 
 ## Example Telnet Message (V14_1HAR_q1)
 
@@ -212,7 +326,7 @@ hargassner_pellet:
   efficiency_percent: 90          # Boiler efficiency (50-100)
 ```
 
-## Available Sensors (Standard Set - 27 Sensors)
+## Available Sensors (Default Standard Set - 26 Sensors)
 
 **Automatic Sensors (4):**
 
@@ -288,20 +402,45 @@ Energy sensor automatically created:
 | Sensors | ✅ Complete |
 | Translations (EN/DE) | ✅ Complete |
 | Documentation | ✅ Complete |
-| Unit Tests | ⚠️ Starter files |
+| Unit Tests | Parser, generator, firmware profiles, sensors, and configuration schemas |
 | HACS Integration | ⏳ Pending |
 | HA Core Integration | ⏳ Future |
 
-## Future Enhancements
+## Validation
 
-- [ ] Write support (send commands to boiler)
-- [ ] Additional sensor platforms (binary_sensor, switch)
-- [ ] Historical data tracking
-- [ ] Efficiency calculations
-- [ ] Predictive maintenance alerts
-- [ ] Custom Lovelace cards
-- [ ] Comprehensive unit tests
-- [ ] Integration tests
+The [test suite](tests/) covers message parsing and generation across firmware
+layouts. [Firmware behavior tests](tests/test_firmware_definitions.py) also cover
+profile isolation, recursive fallback, translations, sparse enums, raw parser
+values, both sensor sets and languages, unknown options, explicit enum opt-out,
+sensor classifications, configurable membership, specialized source parameters,
+stable entity IDs, invalid metadata, and optional display text. Sensor and configuration tests execute
+the integration code with lightweight Home Assistant import stubs. Configuration
+schema serialization checks use the optional development libraries `voluptuous`
+and `voluptuous-serialize`; they verify display labels while retaining stored
+version keys.
+
+V10 regression tests pin every active legacy enum list, boolean formatter
+mapping, and selected parsed sensor values. They check sparse overrides and
+confirm that notification 309 still inherits its default translation and numeric
+readings retain full precision. Tests contain baseline snapshots and do not
+require access to the old project.
+
+The latest local validation on 2026-11-17 used Python 3.13 and reported **218
+passing tests and one failure**. The existing manufacturer-capture test requires
+the private recording `docs/private_firmware_samples/DAQ00001.DAQ`, which is absent
+from this checkout. Restoring that exact recording allows the comparison to run.
+This result does not include live Home Assistant, entity-registry, statistics, or
+physical-boiler verification.
+
+The [parameter validator](tools/parameter_validator.py) checks description
+coverage against each firmware's selected profile. Validation reports no errors;
+warnings identify placeholders, unused descriptions, and naming conventions.
+Metadata covers all known XML parameters; untranslated names retain the raw
+parameter name. Comparison with the original definitions confirmed preservation
+of all XML layouts, translated names, errors, and boiler-state labels. A separate
+check across every bundled layout confirmed that the declared numeric and digital
+classifications retain their previous behavior. Enum and error parameters use
+their declared categorical handling.
 
 ## Code Quality
 
@@ -342,4 +481,4 @@ MIT License - See [LICENSE](LICENSE) file
 
 **Built with ❤️ for the Home Assistant community**
 
-Last Updated: 2025-11-22
+Last Updated: 2026-11-17

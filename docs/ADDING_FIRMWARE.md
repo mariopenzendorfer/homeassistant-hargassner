@@ -20,6 +20,132 @@ This guide explains how to add support for additional Hargassner firmware versio
 
 The integration uses XML-based firmware templates (DAQPRJ format) to parse telnet messages from different boiler firmware versions. Each firmware version may have different parameter positions, names, and data formats.
 
+XML layouts and lookup definitions are separate. The steps below add a layout;
+it automatically uses the default names and error translations. To customize
+those, including enum values and the firmware selector label, see
+[firmware-specific definitions](#firmware-specific-names-enums-errors-and-display-text).
+
+## Firmware-specific names, enums, errors, and display text
+
+Add only firmware-specific differences to the override tables in
+[`firmware_versions/V10_2HAR_n2.py`](../custom_components/bauergroup_hargassnerintegration/firmware_versions/V10_2HAR_n2.py)
+to configure V10. Unspecified definitions inherit from
+[`firmware_versions/default.py`](../custom_components/bauergroup_hargassnerintegration/firmware_versions/default.py).
+The default boiler states and errors are starting values; validate their meanings
+against your boiler's documentation or display before customizing them.
+
+```python
+# Optional label in the setup and options selectors. None or "" shows the version.
+DISPLAY_NAME: Final[str | None] = "Neo-HV 30 + Nano-PK 20 (V10.2HAR.n2)"
+
+PARAMETER_DESCRIPTIONS: Final[dict[str, ParameterDescription]] = {
+    # Override just the German name; the English name still comes from default.
+    "TK": {"de": "Holzkesseltemperatur"},
+    # Sensor classification and STANDARD membership also inherit independently.
+    "Leistung": {"state_class": "measurement", "icon": "mdi:gauge", "standard": True},
+    # Override one enum translation; other states, names, and icons inherit.
+    "ZK": {
+        "enum": {
+            7: {"de": "Holzbrand"},
+        },
+    },
+    # The same optional enum works on any analog or digital parameter.
+    "HKZustand_1": {
+        "en": "Heating Circuit State", "de": "Heizkreiszustand",
+        "enum": {
+            0: {"en": "Off", "de": "Aus"},
+            3: {"en": "Heating", "de": "Heizen"},
+        },
+    },
+    # All other parameters use default definitions automatically.
+}
+
+# Error keys remain strings; 0 is reserved for the integration's OK status.
+ERROR_CODES: Final = {
+    "1": {"de": "Eigene Übertemperaturmeldung"},
+}
+
+DEFINITIONS: Final = FirmwareDefinitions(PARAMETER_DESCRIPTIONS, ERROR_CODES, DISPLAY_NAME)
+```
+
+Fallback is recursive: missing parameters, language translations, error codes,
+enum states, and enum label metadata all come from the default profile. Empty
+tables introduce no overrides. New parameters, enum states, or error codes without
+a default must supply both `en` and `de` when defining translations. Parameters
+without translated names display their wire names. To disable an inherited enum, explicitly
+set `"enum": None`; omitting `enum` inherits the default mapping. The parser always
+returns raw values, even when an enum is configured. Unknown enum values become
+`Unknown`/`Unbekannt`; unknown error numbers become `Error N`/`Fehler N`.
+Enum sensors have translated options and no numeric unit or state class.
+
+### Sensor metadata
+
+Sensor setup reads the following fields from the resolved parameter descriptions.
+It does not infer classifications from parameter names or units. XML remains the
+source of measurement units. Missing metadata inherits from the default profile;
+an explicit `None` clears a nullable inherited field such as `device_class`.
+
+| Field | Meaning |
+| --- | --- |
+| `sensor_type` | `parameter` for ordinary values/enums, `boiler_state` for an additional dedicated state entity, or `error` for translated error-code handling and an additional dedicated error entity. |
+| `device_class` | Home Assistant device-class string, such as `temperature`, `current`, or `pressure`; `None` leaves it unset. |
+| `state_class` | `measurement`, `total`, `total_increasing`, or `None`. Enum/error handling always clears numeric state classes. |
+| `standard` | Whether to include the parameter in the STANDARD set. FULL includes every parameter declared in the selected XML layout. |
+| `icon` | Base sensor icon; enum-value icons can override it. |
+| `ok_icon` | Icon used by an error sensor when the error code is zero. |
+| `entity_id_suffix` | Unique-ID suffix for the dedicated state/error entity. Defaults preserve `state` and `operation` for the original entities. Additional roles without this field use `<parameter>_state` or `<parameter>_operation`. |
+| `sensor_name` | Optional `en`/`de` names for a dedicated error entity, separate from its FULL parameter name. |
+
+For example, a firmware can make `PK_ZK` the primary state parameter without
+changing sensor code:
+
+```python
+PARAMETER_DESCRIPTIONS: Final[dict[str, ParameterDescription]] = {
+    "ZK": {"sensor_type": "parameter"},
+    "PK_ZK": {
+        "sensor_type": "boiler_state",
+        "entity_id_suffix": "state",
+        "en": "Pellet Boiler State",
+        "de": "Pelletkesselzustand",
+        "enum": {
+            1: {"en": "Off", "de": "Aus"},
+            7: {"en": "Firing", "de": "Heizbetrieb", "icon": "mdi:fireplace"},
+        },
+    },
+}
+```
+
+The numbers above illustrate the schema; use your boiler's actual state meanings.
+Roles can also be assigned to additional parameters; dedicated entity suffixes
+must be unique. Unknown roles or colliding IDs raise a configuration error with
+the offending role or a request to use distinct suffixes. The connection and
+calculated-energy sensors remain integration-level entities. FULL retains its
+existing parameter IDs alongside the dedicated entities and applies the same
+enum/error semantics to them.
+
+The slim V10 profile includes one classification override for `Max Anf Kessel`,
+whose XML unit is Celsius on V10 but absent in the default layout.
+
+For another dedicated firmware profile:
+
+1. Copy the slim `V10_2HAR_n2.py` to `firmware_versions/YOUR_VERSION.py` and add
+   only the overrides and optional `DISPLAY_NAME`. Keep its imports and final
+   `DEFINITIONS` assignment. Either table may remain empty; omitted constructor
+   arguments in `FirmwareDefinitions()` also default to empty override tables.
+2. Statically import the module in
+   [`firmware_versions/__init__.py`](../custom_components/bauergroup_hargassnerintegration/firmware_versions/__init__.py)
+   and register `"YOUR_VERSION": YOUR_VERSION.DEFINITIONS` in `FIRMWARE_DEFINITIONS`.
+3. Ensure the exact same version key has a layout in `FIRMWARE_TEMPLATES` and is
+   listed in `FIRMWARE_VERSIONS`. Display text never changes this stored key.
+4. Restart Home Assistant to load Python definition changes. Check STANDARD and
+   FULL sensors against the boiler display. Existing entity IDs remain unchanged.
+
+Versions without a registered profile use the default tables and display their
+version key. Changing the default profile's display name does not rename them.
+
+Run `python tools/parameter_validator.py` to check firmware-specific description
+coverage. Add parsing and sensor regression coverage when enum semantics change.
+
 **Architecture:**
 ```
 Boiler → DAQ File on SD Card → DAQ Parser Tool → Firmware Template → Integration

@@ -25,8 +25,9 @@ try:
 
     _templates = load_module("firmware_templates")
     FIRMWARE_TEMPLATES = _templates.FIRMWARE_TEMPLATES
-    PARAMETER_DESCRIPTIONS = _templates.PARAMETER_DESCRIPTIONS
     HargassnerMessageParser = load_module("message_parser").HargassnerMessageParser
+    # Imported after the shim initializes the integration's lightweight package.
+    from bauergroup_hargassnerintegration.firmware_versions import get_firmware_definitions
 except (ImportError, FileNotFoundError) as err:
     print(f"Error: Could not import firmware templates: {err}", file=sys.stderr)
     print("Make sure the integration is in the correct directory structure", file=sys.stderr)
@@ -129,7 +130,24 @@ class ParameterValidator:
         """
         print("Checking parameter descriptions...")
 
-        described_params = set(PARAMETER_DESCRIPTIONS.keys())
+        described_params: Set[str] = set()
+        described_count = 0
+        parameter_count = 0
+
+        # Check each firmware against its own profile; another firmware's labels
+        # must not hide a missing description in the selected profile.
+        for firmware in FIRMWARE_TEMPLATES:
+            descriptions = get_firmware_definitions(firmware).parameter_descriptions
+            firmware_params = {p.name for p in HargassnerMessageParser(firmware).parameters}
+            described_params.update(descriptions)
+            described_count += len(firmware_params & descriptions.keys())
+            parameter_count += len(firmware_params)
+            missing = firmware_params - descriptions.keys()
+            if missing:
+                self.warnings.append(
+                    f"[WARN] {firmware}: parameters without descriptions: "
+                    + ", ".join(sorted(missing))
+                )
 
         # Parameters without descriptions
         missing_descriptions = all_params - described_params
@@ -150,8 +168,11 @@ class ParameterValidator:
                 self.warnings.append(f"    - {param}")
 
         # Coverage statistics
-        coverage = (len(described_params & all_params) / len(all_params) * 100) if all_params else 0
-        self.info.append(f"[STAT] Description coverage: {coverage:.1f}% ({len(described_params & all_params)}/{len(all_params)})")
+        coverage = (described_count / parameter_count * 100) if parameter_count else 0
+        self.info.append(
+            f"[STAT] Firmware-specific description coverage: {coverage:.1f}% "
+            f"({described_count}/{parameter_count})"
+        )
 
     def _check_duplicates(self):
         """Check for duplicate parameter names within templates.

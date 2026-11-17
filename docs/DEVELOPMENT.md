@@ -215,20 +215,34 @@ logger:
 
 ### Adding a New Sensor
 
-1. Define in `sensor.py`:
+1. Add metadata to the firmware profile's `PARAMETER_DESCRIPTIONS` table:
+
 ```python
-STANDARD_SENSORS.append((
-    "NewParam",  # Parameter key
-    "New Sensor",  # Display name
-    SensorDeviceClass.TEMPERATURE,  # Device class
-    SensorStateClass.MEASUREMENT,  # State class
-    "mdi:icon",  # Icon
-))
+"NewParam": {
+    "en": "New Sensor",
+    "de": "Neuer Sensor",
+    "device_class": "temperature",
+    "state_class": "measurement",
+    "icon": "mdi:thermometer",
+    "standard": True,
+},
 ```
 
-2. Test with actual boiler data
+2. Ensure the parameter's position and unit are declared in that firmware's XML
+   template. FULL includes XML parameters automatically; `standard` adds this
+   parameter to the STANDARD set. Existing fields inherit from the default
+   profile, so an override can contain only the differences.
+3. Test with actual boiler data. See the
+   [sensor metadata reference](ADDING_FIRMWARE.md#sensor-metadata) for enums,
+   specialized boiler-state/error handling, and dedicated entity IDs.
 
 ### Adding a New Firmware Version
+
+Firmware-specific names, enum labels, errors, and optional selector display text
+belong in a registered profile. See the
+[profile configuration guide](ADDING_FIRMWARE.md#firmware-specific-names-enums-errors-and-display-text).
+The steps below register an XML layout, which uses default lookups until a
+dedicated profile is registered.
 
 1. Get XML template from boiler (if available) or reverse-engineer from messages
 

@@ -2,6 +2,35 @@
 
 Diese Anleitung erklärt, wie du Unterstützung für zusätzliche Hargassner-Firmware-Versionen zur Integration hinzufügst - mit dem automatisierten DAQ-Parser-Tool.
 
+Firmware-spezifische Parameternamen, Zuordnungen von Aufzählungswerten (einschließlich
+der Kesselzustände), übersetzte Fehlermeldungen und ein optionaler Anzeigename für
+die Firmware werden getrennt vom XML-Layout konfiguriert. Einzelheiten findest du
+in der gepflegten
+[Anleitung zur Profilkonfiguration (Englisch)](ADDING_FIRMWARE.md#firmware-specific-names-enums-errors-and-display-text).
+Das schlanke V10-Profil enthält nur abweichende Definitionen und liegt in
+[`firmware_versions/V10_2HAR_n2.py`](../custom_components/bauergroup_hargassnerintegration/firmware_versions/V10_2HAR_n2.py).
+Nicht angegebene Parameter, Übersetzungen, Fehlercodes und einzelne
+Aufzählungswerte werden aus dem Standardprofil übernommen. Leere Tabellen
+übernehmen alle Standardwerte. Mit `"enum": None` kannst du eine geerbte
+Aufzählung ausdrücklich deaktivieren und den Rohwert anzeigen lassen.
+
+Auch der Sensortyp wird im Parameterprofil festgelegt: `sensor_type` wählt zwischen
+`parameter`, `boiler_state` und `error`. `device_class` und `state_class` bestimmen
+die Klassifizierung in Home Assistant, `standard` die Aufnahme in den
+STANDARD-Sensorsatz und `icon` das Symbol. Der Sensorcode leitet diese Angaben
+nicht mehr aus Parameternamen oder Einheiten ab. Einheiten stammen weiterhin aus
+dem XML-Layout. Der FULL-Sensorsatz enthält alle dort deklarierten Parameter.
+
+Mit `boiler_state` oder `error` erzeugt die Integration zusätzlich einen eigenen
+Zustands- beziehungsweise Fehlersensor für den jeweiligen Parameter.
+`entity_id_suffix` legt dessen eindeutige Kennung fest; die bisherigen Kennungen
+`state` und `operation` bleiben im Standardprofil erhalten. Für zusätzliche
+Sensoren müssen die Kennungen eindeutig sein. `sensor_name` kann den Namen eines
+eigenen Fehlersensors übersetzen, `ok_icon` dessen Symbol bei fehlerfreiem Betrieb
+festlegen. Verbindung und berechnete Wärmemenge bleiben separate Sensoren der
+Integration. Das V10-Profil enthält außerdem eine abweichende Temperaturklasse
+für `Max Anf Kessel`, da nur dessen V10-Layout eine Celsius-Einheit angibt.
+
 ## Inhaltsverzeichnis
 
 - [Überblick](#überblick)

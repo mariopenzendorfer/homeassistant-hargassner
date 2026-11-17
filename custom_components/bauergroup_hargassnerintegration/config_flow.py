@@ -33,6 +33,7 @@ from .exceptions import (
     HargassnerConnectionError,
     HargassnerTimeoutError,
 )
+from .firmware_versions import get_firmware_display_name
 from .telnet_client import HargassnerTelnetClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -111,7 +112,10 @@ class HargassnerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             {
                 vol.Required(CONF_HOST): cv.string,
                 vol.Required(CONF_FIRMWARE, default="V14_1HAR_q1"): vol.In(
-                    FIRMWARE_VERSIONS
+                    {
+                        version: get_firmware_display_name(version)
+                        for version in FIRMWARE_VERSIONS
+                    }
                 ),
                 vol.Optional(CONF_DEVICE_NAME, default="Hargassner"): cv.string,
                 vol.Optional(CONF_LANGUAGE, default=LANGUAGE_EN): vol.In(
@@ -175,7 +179,10 @@ class HargassnerOptionsFlow(config_entries.OptionsFlow):
         data_schema = vol.Schema(
             {
                 vol.Optional(CONF_FIRMWARE, default=current_firmware): vol.In(
-                    FIRMWARE_VERSIONS
+                    {
+                        version: get_firmware_display_name(version)
+                        for version in FIRMWARE_VERSIONS
+                    }
                 ),
                 vol.Optional(CONF_LANGUAGE, default=current_language): vol.In(
                     [LANGUAGE_EN, LANGUAGE_DE]

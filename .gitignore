@@ -63,9 +63,11 @@ home-assistant_v2.db
 
 # Environment
 .env
+.venv
 venv/
 env/
 ENV/
+.temp
 
 # mypy
 .mypy_cache/

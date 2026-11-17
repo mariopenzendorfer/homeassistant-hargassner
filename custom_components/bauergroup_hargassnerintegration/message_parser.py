@@ -5,7 +5,9 @@ import logging
 import xml.etree.ElementTree as ET
 from typing import Any
 
-from .firmware_templates import FIRMWARE_TEMPLATES, PARAMETER_DESCRIPTIONS
+from .firmware_templates import FIRMWARE_TEMPLATES
+from .firmware_versions import get_firmware_definitions
+from .parameter_description import ParameterDescription
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -20,6 +22,8 @@ class ParameterDefinition:
         unit: str | None = None,
         is_digital: bool = False,
         bit_mask: int | None = None,
+        *,
+        description: ParameterDescription | str,
     ) -> None:
         """Initialize parameter definition.
 
@@ -29,13 +33,14 @@ class ParameterDefinition:
             unit: Unit of measurement (e.g., '°C', '%')
             is_digital: Whether this is a digital (boolean) parameter
             bit_mask: For digital parameters, the bit mask to extract value
+            description: Firmware-specific name, sensor classification, and enum metadata.
         """
         self.name = name
         self.index = index
         self.unit = unit
         self.is_digital = is_digital
         self.bit_mask = bit_mask
-        self.description = PARAMETER_DESCRIPTIONS.get(name, name)
+        self.description = description
 
     def parse_value(self, values: list[str]) -> Any:
         """Parse value from message array.
@@ -99,6 +104,7 @@ class HargassnerMessageParser:
     def _parse_template(self) -> None:
         """Parse XML firmware template and build parameter definitions."""
         template = FIRMWARE_TEMPLATES.get(self._firmware_version)
+        definitions = get_firmware_definitions(self._firmware_version)
 
         if not template:
             _LOGGER.error(
@@ -106,6 +112,7 @@ class HargassnerMessageParser:
                 self._firmware_version,
             )
             template = FIRMWARE_TEMPLATES["V14_1HAR_q1"]
+            definitions = get_firmware_definitions("default")
 
         try:
             root = ET.fromstring(template)
@@ -122,6 +129,7 @@ class HargassnerMessageParser:
                     index=param_id,
                     unit=param_unit if param_unit else None,
                     is_digital=False,
+                    description=definitions.parameter_descriptions.get(param_name, param_name),
                 )
 
                 analog_count = max(analog_count, param_id + 1)
@@ -140,6 +148,7 @@ class HargassnerMessageParser:
                     index=digital_offset + param_id,
                     is_digital=True,
                     bit_mask=1 << param_bit,
+                    description=definitions.parameter_descriptions.get(param_name, param_name),
                 )
 
                 digital_count = max(digital_count, param_id + 1)

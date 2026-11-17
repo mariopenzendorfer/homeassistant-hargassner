@@ -68,6 +68,10 @@ python daq_parser.py DAQ00000.DAQ --output python
 
 **Schritt 4:** Parameter-Beschreibungen ergänzen
 - In `PARAMETER_DESCRIPTIONS` neue Parameter hinzufügen
+- Firmware-spezifische Übersetzungen, Sensortypen und Aufzählungswerte werden im
+  jeweiligen [Firmware-Profil](../custom_components/bauergroup_hargassnerintegration/firmware_versions/V10_2HAR_n2.py)
+  überschrieben; fehlende Angaben stammen aus dem
+  [Standardprofil](../custom_components/bauergroup_hargassnerintegration/firmware_versions/default.py).
 - Beschreibungen anhand Kessel-Manual ergänzen
 
 **Schritt 5:** Testen
